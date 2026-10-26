@@ -38,7 +38,10 @@ def montar_executavel(pasta, info, destino):
 
 
 def gh(*args):
-    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+    processo = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if processo.returncode:
+        raise RuntimeError(processo.stderr.strip())
+    return processo.stdout
 
 
 def main():
@@ -53,19 +56,26 @@ def main():
     if not notas.is_file():
         raise ValueError("Notas da versão ausentes")
     tag = "v" + versao
-    consulta = subprocess.run(["gh", "release", "view", tag], capture_output=True)
-    if consulta.returncode == 0:
-        raise ValueError("A versão já existe; nenhuma Release existente será sobrescrita")
+    endpoint = f"repos/{os.environ['GH_REPO']}/releases"
+    def buscar_release():
+        releases = json.loads(gh("api", endpoint + "?per_page=100"))
+        return next((r for r in releases if r["tag_name"] == tag), None)
+    release = buscar_release()
     with tempfile.TemporaryDirectory() as pasta_temporaria:
         executavel = Path(pasta_temporaria) / info["arquivo"]
         montar_executavel(pasta, info, executavel)
-        gh("release", "create", tag, str(executavel), "--draft", "--target", os.environ["GITHUB_SHA"],
-           "--title", "Auditoria Fiscal " + versao, "--notes-file", str(notas))
-        release = json.loads(gh("api", f"repos/{os.environ['GH_REPO']}/releases/tags/{tag}"))
+        if release is None:
+            gh("release", "create", tag, str(executavel), "--draft", "--target", os.environ["GITHUB_SHA"],
+               "--title", "Auditoria Fiscal " + versao, "--notes-file", str(notas))
+            # Uma Release em rascunho ainda pode não ter uma tag resolvível.
+            release = buscar_release()
+        if release is None:
+            raise ValueError("Não foi possível localizar o rascunho criado")
         assets = [a for a in release["assets"] if a["name"] == info["arquivo"]]
         if len(assets) != 1 or assets[0].get("digest") != "sha256:" + info["sha256"] or assets[0]["size"] != info["tamanho"]:
             raise ValueError("Asset não passou na verificação do GitHub; a Release permanece como rascunho")
-        gh("release", "edit", tag, "--draft=false", "--latest")
+        if release.get("draft"):
+            gh("api", "--method", "PATCH", endpoint + "/" + str(release["id"]), "-F", "draft=false", "-f", "make_latest=true")
         print(f"Publicado: https://github.com/{os.environ['GH_REPO']}/releases/tag/{tag}")
 
 
