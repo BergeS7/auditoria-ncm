@@ -3,7 +3,7 @@ name: Publicar versao Windows
 on:
   push:
     branches: [main]
-    paths: [canal.json]
+    paths: [canal.json, publicar.py]
   workflow_dispatch:
 
 permissions:
